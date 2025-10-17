@@ -1,0 +1,11 @@
+Flask==3.0.3
+gunicorn==23.0.0
+
+# Data / CSV generation
+pandas==2.2.2
+
+# Optional: if you decide to integrate Firestore server-side later
+google-cloud-firestore>=2.16.0
+
+# For PDF/CSV export utilities already referenced in code comments (future-proof)
+reportlab==4.2.2
