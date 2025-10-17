@@ -1,293 +1,496 @@
-from flask import Flask, send_file, request, Response
-import csv
-import io
-import time # Used for simulated timestamp in CSV
-from datetime import datetime
+from flask import Flask, render_template_string, make_response
+from io import BytesIO
+import datetime
+import os
 
-# Initialize Flask
+# Initialize Flask application
 app = Flask(__name__)
 
-# --- Mock Data Fetching (Server-side for CSV Report Generation) ---
-def fetch_mock_biometric_data():
-    """Returns structured data suitable for CSV export, simulating Firestore data."""
-    # Generate mock data points with varied results and timestamps
-    now_ms = int(time.time() * 1000)
-    return [
-        {
-            'timestamp': now_ms - (86400 * 1000 * 5),
-            'type': 'blink',
-            'rate': 9,
-            'strain': 'YES',
-            'vocal_duration': 'N/A',
-            'vocal_strain': 'N/A'
-        },
-        {
-            'timestamp': now_ms - (86400 * 1000 * 3) - (3600 * 1000 * 12),
-            'type': 'voice',
-            'rate': 'N/A',
-            'strain': 'N/A',
-            'vocal_duration': '3.8s',
-            'vocal_strain': 'Low'
-        },
-        {
-            'timestamp': now_ms - (86400 * 1000 * 1),
-            'type': 'blink',
-            'rate': 18,
-            'strain': 'No',
-            'vocal_duration': 'N/A',
-            'vocal_strain': 'N/A'
-        },
-        {
-            'timestamp': now_ms - (3600 * 1000 * 2),
-            'type': 'voice',
-            'rate': 'N/A',
-            'strain': 'N/A',
-            'vocal_duration': '15.5s',
-            'vocal_strain': 'High (Detected)'
-        }
-    ]
-
-# --- Flask Routes ---
-
-@app.route('/')
-def index():
-    """Serves the complete single-file HTML/JS application."""
-    # We load the entire HTML template here, including all client-side logic.
-    return HTML_TEMPLATE
-
-@app.route('/download_report')
-def download_report():
-    """Fetches data (mocked) and generates a CSV file for download."""
-    
-    data = fetch_mock_biometric_data()
-    
-    if not data:
-        # NOTE: In a production Flask app, you'd integrate Firebase Admin SDK
-        # to fetch user-specific data from Firestore here before generating.
-        return "No data available to generate report.", 404
-
-    # Create a stream for the CSV file
-    si = io.StringIO()
-    cw = csv.writer(si)
-
-    # Write headers
-    headers = ['Timestamp', 'Type', 'Blink Rate (b/m)', 'Eye Strain Risk', 'Vocal Test Duration', 'Vocal Strain Level']
-    cw.writerow(headers)
-
-    # Write data rows
-    for entry in data:
-        # Convert timestamp (ms) to readable format
-        timestamp_dt = datetime.fromtimestamp(entry['timestamp'] / 1000)
-        
-        row = [
-            timestamp_dt.strftime('%Y-%m-%d %H:%M:%S'),
-            entry['type'].capitalize(),
-            entry['rate'],
-            entry['strain'],
-            entry['vocal_duration'],
-            entry['vocal_strain']
-        ]
-        cw.writerow(row)
-
-    output = si.getvalue()
-    
-    # Return the CSV file as a downloadable response
-    return Response(
-        output,
-        mimetype="text/csv",
-        headers={"Content-disposition": "attachment; filename=biometric_report.csv"}
-    )
-
-
-# --- Frontend HTML/CSS/JavaScript Template (The entire client application) ---
-HTML_TEMPLATE = """
+# --- START OF EMBEDDED HTML/JAVASCRIPT FRONTEND ---
+# This multiline string contains the entire client-side application (HTML, Tailwind CSS, and JavaScript with Firebase logic).
+HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enhanced Biometric Monitor</title>
+    <title>Biometric Health Monitor (Single File)</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Custom styles for video feed placeholder and recording pulse */
-        #video-feed {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            background-color: #1f2937; /* Gray-900 */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .risk-low { border-color: #34d399; }
+        .risk-medium { border-color: #fbbf24; }
+        .risk-high { border-color: #f87171; }
+        .tab-button.active { 
+            border-bottom-width: 4px;
+            border-color: #4f46e5;
+            background-color: white;
+            color: #4f46e5;
         }
-        .pulse-red {
-            animation: pulse-red 1s infinite;
-        }
-        @keyframes pulse-red {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-            50% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
-        }
-        .aspect-video {
-            aspect-ratio: 16 / 9;
-        }
-        .main-container {
-            min-height: 100vh;
-        }
-        /* Fade in/out for the notification banner */
-        .fade-in {
-            animation: fadeIn 0.5s ease-out forwards;
-        }
-        .fade-out {
-            animation: fadeOut 0.5s ease-out forwards;
-        }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes fadeOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-10px); } }
     </style>
 </head>
-<body class="bg-gray-100 font-sans antialiased">
-    
-    <!-- Global Notification Banner -->
-    <div id="alert-banner" class="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 p-4 rounded-lg shadow-2xl transition duration-300 hidden opacity-0">
-        <p id="alert-message" class="font-semibold"></p>
-    </div>
+<body class="bg-gray-50">
 
-    <div id="app" class="flex justify-center p-4 sm:p-6">
-        <div class="w-full max-w-5xl space-y-8">
+    <!-- Global Alert Banner Placeholder -->
+    <div id="alert-banner" class="fixed top-4 right-4 z-50 p-4 text-sm rounded-lg shadow-xl transition-opacity duration-500 opacity-0 pointer-events-none" role="alert"></div>
 
-            <!-- Header -->
-            <header class="bg-white p-6 rounded-2xl shadow-xl border-t-4 border-indigo-600">
-                <h1 class="text-4xl font-extrabold text-gray-900 mb-2">Biometric Strain Monitor</h1>
-                <p class="text-gray-600 mb-4">Real-time tools for monitoring vocal and visual fatigue.</p>
-                <div id="user-id-display" class="text-xs text-gray-500 p-2 bg-gray-100 rounded-lg max-w-fit">Authenticating...</div>
-            </header>
-
-            <!-- Tool Navigation -->
-            <div class="flex bg-white rounded-xl shadow-md p-2 space-x-2">
-                <button id="nav-tracker" class="flex-1 py-3 font-semibold rounded-xl transition-colors bg-indigo-600 text-white shadow-lg">
-                    📊 Tracker Tools
-                </button>
-                <button id="nav-reports" class="flex-1 py-3 font-semibold rounded-xl transition-colors text-gray-700 hover:bg-gray-100">
-                    📜 Reports
-                </button>
+    <div class="min-h-screen p-4 md:p-8 max-w-7xl mx-auto">
+        <header class="mb-8 flex flex-col md:flex-row justify-between items-center border-b pb-4">
+            <h1 class="text-3xl font-bold text-gray-800">Biometric Health Monitor</h1>
+            <div class="mt-2 md:mt-0 text-sm text-gray-500">
+                User ID: <span id="user-id" class="font-mono text-xs p-1 bg-gray-200 rounded-lg select-all">Loading...</span>
             </div>
+        </header>
 
-            <!-- Tracker View -->
-            <section id="tracker-view" class="space-y-8">
-                <!-- Tool Selection Area -->
-                <div class="flex bg-white rounded-xl shadow-md p-2 space-x-2">
-                    <button id="tool-blink" class="flex-1 py-3 font-semibold rounded-xl transition-colors bg-indigo-600 text-white shadow-lg">
-                        👁️ Eye Strain Tracker
-                    </button>
-                    <button id="tool-voice" class="flex-1 py-3 font-semibold rounded-xl transition-colors text-gray-700 hover:bg-gray-100">
-                        🎙️ Voice Fatigue Tester
-                    </button>
-                </div>
-                
-                <!-- Individual Tool Container -->
-                <div id="tool-container">
-                    <!-- Dynamic Tool Content Renders Here -->
-                </div>
+        <main>
+            <!-- Tab Navigation -->
+            <nav class="flex space-x-2 border-b-2 border-gray-200 mb-8">
+                <button id="tab-monitor" class="tab-button active py-3 px-6 rounded-t-xl font-semibold transition-all hover:bg-white hover:text-indigo-700">Monitor</button>
+                <button id="tab-history" class="tab-button py-3 px-6 rounded-t-xl font-semibold transition-all hover:bg-white hover:text-indigo-700">History</button>
+                <button id="tab-reports" class="tab-button py-3 px-6 rounded-t-xl font-semibold transition-all hover:bg-white hover:text-indigo-700">Reports</button>
+            </nav>
 
-                <!-- Historical Entries List -->
-                <div class="space-y-4">
-                    <h2 class="text-3xl font-bold text-gray-800 border-b pb-2">Analysis History</h2>
-                    <div id="history-list" class="space-y-4">
-                        <div class="p-6 text-center text-indigo-500 font-medium bg-white rounded-xl shadow-md">Loading your history...</div>
+            <!-- Tab Content -->
+            <div id="tab-content" class="min-h-[400px]">
+                <!-- Monitor Tab Content -->
+                <div id="content-monitor" class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    
+                    <!-- Eye Strain Tracker -->
+                    <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-100 transition duration-300">
+                        <h2 class="text-2xl font-bold mb-4 text-indigo-700 flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 mr-2 text-indigo-500" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"/></svg>
+                            Eye Strain Tracker
+                        </h2>
+                        <p class="text-gray-600 mb-4 text-sm">Measures blink frequency (simulated) to assess potential <strong>visual fatigue</strong>.</p>
+                        <div class="relative w-full aspect-video bg-gray-900 rounded-xl overflow-hidden mb-5 border-4 border-gray-300">
+                            <video id="cameraFeed" class="w-full h-full" autoplay playsinline style="transform: scaleX(-1); display: none;"></video>
+                            <div id="camera-placeholder" class="absolute inset-0 flex flex-col items-center justify-center bg-gray-800 text-gray-400 text-lg">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 mb-2" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"/></svg>
+                                Camera Preview Disabled
+                            </div>
+                            <div id="eye-risk-badge" class="absolute top-2 left-2 px-3 py-1 text-sm font-bold rounded-full shadow-lg border-2 border-white hidden"></div>
+                        </div>
+                        <div class="flex space-x-4">
+                            <button id="btn-start-eye" class="flex-1 px-6 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-md hover:bg-indigo-700 transition duration-150 flex items-center justify-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"/></svg>
+                                Start Analysis
+                            </button>
+                            <button id="btn-stop-eye" class="flex-1 px-6 py-3 bg-red-600 text-white font-bold rounded-lg shadow-md hover:bg-red-700 transition duration-150 flex items-center justify-center hidden">
+                                <span class="inline-block w-3 h-3 mr-2 bg-white rounded-full animate-pulse"></span>
+                                Stop & Save
+                            </button>
+                        </div>
+                        <p id="eye-status" class="mt-4 text-center text-sm font-semibold text-gray-500">Awaiting user action...</p>
+                    </div>
+
+                    <!-- Voice Fatigue Checker -->
+                    <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-100 transition duration-300">
+                        <h2 class="text-2xl font-bold mb-4 text-green-700 flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 mr-2 text-green-500" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10v-3a1 1 0 00-1-1h-2a1 1 0 00-1 1v3zm0 0a1 1 0 01-1 1H8a1 1 0 01-1-1v-3h4v3zm-4-3a2 2 0 104 0V4a2 2 0 10-4 0v7z" clip-rule="evenodd"/></svg>
+                            Voice Fatigue Checker
+                        </h2>
+                        <p class="text-gray-600 mb-4 text-sm">Analyzes vocal recordings (simulated) for pitch and volume variance for <strong>vocal strain</strong>.</p>
+                        <div class="relative w-full h-40 bg-gray-100 rounded-xl flex items-center justify-center mb-5 border-4 border-gray-300">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-20 w-20 text-gray-400" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4z" clip-rule="evenodd"/><path d="M12 14l-.868-.694A2 2 0 009 13.5v-3.236a2 2 0 00-1.132-.568L7 9.5V14a5 5 0 008.204 3.541.25.25 0 01-.284.225A6.5 6.5 0 0110 18.5a6.5 6.5 0 01-5.92-.734.25.25 0 01-.284-.225A5 5 0 001 14V9.5l.2-.187a2 2 0 001.132.568V13.5a2 2 0 001.132.568L5 14v1a1 1 0 001 1h8a1 1 0 001-1v-1l.868-.694A2 2 0 0017 13.5v-3.236a2 2 0 00-1.132-.568L15 9.5V14a5 5 0 008.204 3.541.25.25 0 01-.284.225A6.5 6.5 0 0110 18.5a6.5 6.5 0 01-5.92-.734.25.25 0 01-.284-.225A5 5 0 001 14z" clip-rule="evenodd"/></svg>
+                            <div id="voice-ping" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-red-500 rounded-full animate-ping opacity-75 hidden"></div>
+                        </div>
+                        <div class="flex space-x-4">
+                            <button id="btn-start-voice" class="flex-1 px-6 py-3 bg-green-600 text-white font-bold rounded-lg shadow-md hover:bg-green-700 transition duration-150 flex items-center justify-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"/></svg>
+                                Start Recording
+                            </button>
+                            <button id="btn-stop-voice" class="flex-1 px-6 py-3 bg-red-600 text-white font-bold rounded-lg shadow-md hover:bg-red-700 transition duration-150 flex items-center justify-center hidden">
+                                <span class="inline-block w-3 h-3 mr-2 bg-white rounded-full animate-pulse"></span>
+                                Stop & Save
+                            </button>
+                        </div>
+                        <p id="voice-status" class="mt-4 text-center text-sm font-semibold text-gray-500">Awaiting user action...</p>
                     </div>
                 </div>
-            </section>
-            
-            <!-- Reports View -->
-            <section id="reports-view" class="space-y-6 hidden">
-                <div class="p-8 bg-white rounded-2xl shadow-xl">
-                    <h2 class="text-3xl font-bold text-gray-800 mb-4">Historical Data Reports</h2>
-                    <p class="text-gray-600 mb-8 border-b pb-4">
-                        Download a comprehensive report of all your tracked biometric data. This uses a server-side route 
-                        to securely generate the CSV file.
-                    </p>
-                    
-                    <a href="/download_report" id="download-button" class="inline-block w-full text-center py-4 px-6 bg-green-600 hover:bg-green-700 text-white text-xl font-bold rounded-xl shadow-lg transition duration-200 transform hover:scale-[1.01] active:scale-[0.99]">
-                        ⬇️ Download Full Report (CSV)
-                    </a>
+
+                <!-- History Tab Content -->
+                <div id="content-history" class="hidden">
+                    <h2 class="text-2xl font-bold mb-6 text-gray-800">Analysis History</h2>
+                    <div id="history-list" class="space-y-4">
+                        <div class="text-center text-gray-500 p-8 bg-white rounded-xl shadow-inner">
+                            Loading history...
+                        </div>
+                    </div>
                 </div>
-                <div id="report-message" class="text-center text-gray-500 italic p-6 bg-white rounded-xl shadow-md">
-                    Note: The data for this download is simulated on the Flask server side for this environment.
+
+                <!-- Reports Tab Content -->
+                <div id="content-reports" class="hidden">
+                    <div class="bg-white p-8 rounded-2xl shadow-xl border border-gray-100">
+                        <h2 class="text-2xl font-bold mb-4 text-gray-800">Download Reports</h2>
+                        <p class="text-gray-600 mb-6">
+                            Generate a comprehensive <strong>PDF report</strong> containing all recorded entries and summary statistics. 
+                            <strong>Note:</strong> The report is generated on the Flask backend via the <code>/download_report</code> endpoint and uses simulated data.
+                        </p>
+                        <a 
+                            id="pdf-download-link" 
+                            href="/download_report" 
+                            target="_blank" 
+                            class="inline-flex items-center px-8 py-3 bg-red-600 text-white font-bold rounded-xl shadow-lg hover:bg-red-700 transition duration-200 transform hover:scale-105"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5 4v3h2V4h3V2H7a2 2 0 00-2 2zm0 8H3a2 2 0 00-2 2v3a2 2 0 002 2h3v-2H5v-3zm12-4v3h-2v-3h-3V8h3a2 2 0 012 2zM9 16v-3h2v3h3v2H9a2 2 0 01-2-2z" clip-rule="evenodd"/></svg>
+                            Generate & Download Report
+                        </a>
+                    </div>
                 </div>
-            </section>
-        </div>
+
+            </div>
+        </main>
     </div>
 
-    <!-- Firebase Client SDK -->
+    <!-- JavaScript and Firebase Initialization -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, query, addDoc, serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, addDoc, onSnapshot, collection, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Global variables provided by the environment (Mandatory usage)
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        // Global constants provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-wellbeing-monitor';
+        const firebaseConfig = (typeof __firebase_config !== 'undefined' && __firebase_config) ? JSON.parse(__firebase_config) : {};
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        // --- GLOBAL STATE & FIREBASE SETUP ---
-        let db = null;
-        let auth = null;
-        let userId = null;
+        // --- GLOBAL STATE & REFERENCES ---
+        let db;
+        let auth;
+        let userId = 'Loading...';
         let isAuthReady = false;
-        let currentEntries = [];
-        let loading = true;
-        
-        // Tool-specific states for indefinite running
-        let blinkAnalysisInterval = null;
-        let voiceRecordingInterval = null;
-        let voiceRecordStartTime = null;
-        let mediaRecorder = null;
-        let voiceStream = null;
-        let blinkStream = null;
+        let isTrackingEye = false;
+        let isRecordingVoice = false;
+        let eyeStreamRef = null;
+        let voiceStreamRef = null;
+        let voiceRecorderRef = null;
+        let eyeIntervalRef = null;
+        let voiceIntervalRef = null;
+        let eyeStartTimeRef = null;
+        let voiceStartTimeRef = null;
+        let lastEyeScoreRef = 0;
+        let historyData = [];
 
-        const getUserCollectionPath = (uid) => \`/artifacts/\${appId}/users/\${uid}/biometric_entries\`;
-        
+        // --- DOM Elements ---
+        const D = (id) => document.getElementById(id);
+        const userIdEl = D('user-id');
+        const alertBanner = D('alert-banner');
+        const contentMonitor = D('content-monitor');
+        const contentHistory = D('content-history');
+        const contentReports = D('content-reports');
+        const tabMonitor = D('tab-monitor');
+        const tabHistory = D('tab-history');
+        const tabReports = D('tab-reports');
+        const historyList = D('history-list');
+
+        const cameraFeed = D('cameraFeed');
+        const cameraPlaceholder = D('camera-placeholder');
+        const eyeRiskBadge = D('eye-risk-badge');
+        const eyeStatusEl = D('eye-status');
+        const btnStartEye = D('btn-start-eye');
+        const btnStopEye = D('btn-stop-eye');
+
+        const voicePing = D('voice-ping');
+        const voiceStatusEl = D('voice-status');
+        const btnStartVoice = D('btn-start-voice');
+        const btnStopVoice = D('btn-stop-voice');
+
         // --- UTILITY FUNCTIONS ---
 
-        function logError(message) {
-            const banner = document.getElementById('alert-banner');
-            const msgEl = document.getElementById('alert-message');
-            
-            banner.className = 'fixed top-4 left-1/2 transform -translate-x-1/2 z-50 p-4 rounded-lg shadow-2xl bg-red-500 text-white fade-in';
-            msgEl.textContent = \`ERROR: \${message}\`;
-            banner.classList.remove('hidden');
-            
-            setTimeout(() => {
-                banner.classList.add('fade-out');
-                banner.classList.remove('fade-in');
-            }, 5000);
+        /**
+         * Calculates risk data (level, color, suggestion) based on a score (1-5).
+         */
+        function getRiskData(score) {
+            let level, classColor, suggestion;
+            if (score >= 4.0) {
+                level = 'HIGH';
+                classColor = 'risk-high bg-red-100 text-red-800 border-red-400';
+                suggestion = 'Immediate break recommended. Hydrate and rest your eyes/voice.';
+            } else if (score >= 2.0) {
+                level = 'MEDIUM';
+                classColor = 'risk-medium bg-amber-100 text-amber-800 border-amber-400';
+                suggestion = 'Take a short break soon. Moderate risk detected.';
+            } else {
+                level = 'LOW';
+                classColor = 'risk-low bg-green-100 text-green-800 border-green-400';
+                suggestion = 'Good to go. Continue monitoring.';
+            }
+            return { level, classColor, suggestion };
         }
-        
-        function logMessage(message, type = 'success') {
-            const banner = document.getElementById('alert-banner');
-            const msgEl = document.getElementById('alert-message');
-            
-            let color = '';
-            if (type === 'success') {
-                color = 'bg-green-600 text-white';
-            } else if (type === 'info') {
-                color = 'bg-indigo-600 text-white';
+
+        /**
+         * Displays a temporary status alert.
+         */
+        function showAlert(message, type = 'success') {
+            const classMap = {
+                success: 'bg-green-600 text-white',
+                error: 'bg-red-600 text-white',
+                info: 'bg-blue-600 text-white'
+            };
+
+            alertBanner.textContent = message;
+            alertBanner.className = `fixed top-4 right-4 z-50 p-4 text-sm rounded-lg shadow-xl transition-opacity duration-500 opacity-100 ${classMap[type]}`;
+
+            setTimeout(() => {
+                alertBanner.classList.remove('opacity-100');
+                alertBanner.classList.add('opacity-0');
+            }, 4000);
+        }
+
+        /**
+         * Renders a single history item.
+         */
+        function renderHistoryItem(entry) {
+            const isEye = entry.type === 'Eye Strain';
+            const { level, classColor, suggestion } = getRiskData(entry.score);
+            const timeStr = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : 'N/A';
+            const duration = entry.duration_sec ? entry.duration_sec.toFixed(0) + ' seconds' : 'N/A';
+            const score = entry.score.toFixed(1);
+
+            return `
+                <div class="p-5 rounded-xl shadow-lg border-2 transition duration-200 ${classColor}">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="font-extrabold text-xl flex items-center">
+                            ${isEye ? '👀 Eye Strain' : '🎤 Voice Fatigue'}
+                        </div>
+                        <div class="text-sm font-medium opacity-80">${timeStr}</div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-sm text-gray-700">
+                        <p>
+                            <strong class="font-semibold">Duration:</strong> ${duration}
+                        </p>
+                        <p>
+                            <strong class="font-semibold">Risk Score (1-5):</strong>
+                            <span class="font-black text-2xl ml-2">${score}</span>
+                        </p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-gray-300 opacity-90">
+                        <p>
+                            <strong class="font-bold">Risk Level:</strong> <span class="font-extrabold">${level}</span>
+                        </p>
+                        <p class="mt-1 text-sm">${suggestion}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        /**
+         * Renders the entire history list.
+         */
+        function renderHistoryList() {
+            if (!isAuthReady) {
+                historyList.innerHTML = `<div class="text-center text-gray-500 p-8 bg-white rounded-xl shadow-inner">Loading history...</div>`;
+            } else if (historyData.length === 0) {
+                historyList.innerHTML = `<div class="text-center text-gray-500 p-8 bg-white rounded-xl shadow-inner">No analysis entries recorded yet.</div>`;
+            } else {
+                historyList.innerHTML = historyData.map(renderHistoryItem).join('');
+            }
+        }
+
+        // --- DATA SAVING FUNCTION (Firestore) ---
+        async function saveEntry(type, score, duration, statusMessage) {
+            if (!db || !userId) {
+                showAlert("Error: Cannot save entry. Database not ready.", 'error');
+                return;
             }
 
-            banner.className = \`fixed top-4 left-1/2 transform -translate-x-1/2 z-50 p-4 rounded-lg shadow-2xl \${color} fade-in\`;
-            msgEl.textContent = message;
-            banner.classList.remove('hidden');
+            const collectionRef = collection(db, `artifacts/${appId}/users/${userId}/monitor_entries`);
 
-            setTimeout(() => {
-                banner.classList.add('fade-out');
-                banner.classList.remove('fade-in');
-            }, 3500);
+            try {
+                const newDoc = {
+                    type,
+                    score: parseFloat(score.toFixed(2)),
+                    duration_sec: duration,
+                    message: statusMessage,
+                    timestamp: serverTimestamp()
+                };
+                await addDoc(collectionRef, newDoc);
+                showAlert(`New ${type} analysis saved successfully! Score: ${score.toFixed(1)}`);
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                showAlert("Error saving analysis. Check console.", 'error');
+            }
         }
 
-        // --- FIREBASE SETUP ---
-        async function initializeFirebase() {
-            if (!firebaseConfig) {
-                logError("Firebase configuration is missing.");
-                document.getElementById('user-id-display').textContent = 'Authentication Failed';
+        // --- EYE TRACKER LOGIC ---
+
+        async function startEyeTracker() {
+            if (isTrackingEye) return;
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                eyeStreamRef = stream;
+                
+                cameraFeed.srcObject = stream;
+                cameraFeed.play();
+                cameraFeed.style.display = 'block';
+                cameraPlaceholder.style.display = 'none';
+
+                isTrackingEye = true;
+                eyeStatusEl.textContent = 'Analysis running... Click Stop to save.';
+                eyeStatusEl.classList.add('text-red-500');
+                eyeStatusEl.classList.remove('text-gray-500');
+                btnStartEye.classList.add('hidden');
+                btnStopEye.classList.remove('hidden');
+
+                eyeStartTimeRef = Date.now();
+                lastEyeScoreRef = 1.0;
+                eyeRiskBadge.classList.remove('hidden');
+
+                // Start continuous analysis simulation
+                eyeIntervalRef = setInterval(() => {
+                    const elapsedSeconds = (Date.now() - eyeStartTimeRef) / 1000;
+                    
+                    // Simulate score
+                    const elapsedMinutes = elapsedSeconds / 60;
+                    const baseRisk = Math.min(4.5, elapsedMinutes * 0.7);
+                    const fluctuation = Math.random() * 0.8 - 0.4;
+                    const newScore = Math.max(1.0, baseRisk + fluctuation);
+                    lastEyeScoreRef = newScore;
+
+                    const { level, classColor } = getRiskData(newScore);
+                    eyeStatusEl.innerHTML = `Running: <span class="font-bold text-indigo-600">${elapsedSeconds.toFixed(0)}s</span>. Current Risk: <span class="font-bold">${level} (${newScore.toFixed(1)})</span>`;
+                    eyeRiskBadge.textContent = `Risk: ${level}`;
+                    eyeRiskBadge.className = `absolute top-2 left-2 px-3 py-1 text-sm font-bold rounded-full shadow-lg border-2 border-white ${classColor}`;
+
+                }, 2000);
+
+                showAlert("Eye Strain Tracker started. Look into the camera.", 'info');
+
+            } catch (err) {
+                console.error("Error accessing camera: ", err);
+                showAlert("Failed to start camera. Check permissions and try again.", 'error');
+                isTrackingEye = false;
+                eyeStatusEl.textContent = 'Error accessing camera. Check console.';
+            }
+        }
+
+        function stopEyeTracker() {
+            if (!isTrackingEye) return;
+
+            // Stop simulation interval
+            if (eyeIntervalRef) clearInterval(eyeIntervalRef);
+            
+            // Stop media stream tracks
+            if (eyeStreamRef) {
+                eyeStreamRef.getTracks().forEach(track => track.stop());
+                cameraFeed.srcObject = null;
+                eyeStreamRef = null;
+            }
+
+            const duration = Math.round((Date.now() - eyeStartTimeRef) / 1000);
+            const finalScore = lastEyeScoreRef;
+            const { suggestion } = getRiskData(finalScore);
+
+            saveEntry('Eye Strain', finalScore, duration, `Blink analysis over ${duration}s. ${suggestion}`);
+
+            // Reset UI State
+            isTrackingEye = false;
+            cameraFeed.style.display = 'none';
+            cameraPlaceholder.style.display = 'flex';
+            eyeRiskBadge.classList.add('hidden');
+            eyeStatusEl.textContent = `Analysis stopped. Duration: ${duration}s. Ready to start new session.`;
+            eyeStatusEl.classList.remove('text-red-500');
+            eyeStatusEl.classList.add('text-gray-500');
+            btnStopEye.classList.add('hidden');
+            btnStartEye.classList.remove('hidden');
+            lastEyeScoreRef = 0;
+            showAlert("Eye Strain Tracker stopped and data saved.", 'success');
+        }
+
+        // --- VOICE CHECKER LOGIC ---
+
+        async function startVoiceChecker() {
+            if (isRecordingVoice) return;
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                voiceStreamRef = stream;
+                
+                const recorder = new MediaRecorder(stream);
+                voiceRecorderRef = recorder;
+                recorder.start();
+
+                isRecordingVoice = true;
+                voiceStartTimeRef = Date.now();
+                voicePing.classList.remove('hidden');
+                btnStartVoice.classList.add('hidden');
+                btnStopVoice.classList.remove('hidden');
+
+                // Update duration status indefinitely
+                voiceIntervalRef = setInterval(() => {
+                    const duration = Math.round((Date.now() - voiceStartTimeRef) / 1000);
+                    voiceStatusEl.innerHTML = `Recording: <span class="font-bold text-red-500">${duration}s</span>. Speak normally and click Stop.`;
+                    voiceStatusEl.classList.add('text-red-500');
+                    voiceStatusEl.classList.remove('text-gray-500');
+                }, 1000);
+
+                showAlert("Voice Fatigue Checker started. Microphone is recording.", 'info');
+
+            } catch (err) {
+                console.error("Error accessing microphone: ", err);
+                showAlert("Failed to start microphone. Check permissions and try again.", 'error');
+                isRecordingVoice = false;
+                voiceStatusEl.textContent = 'Error accessing microphone. Check console.';
+            }
+        }
+
+        function stopVoiceChecker() {
+            if (!isRecordingVoice) return;
+
+            // Stop simulation interval
+            if (voiceIntervalRef) clearInterval(voiceIntervalRef);
+
+            // Stop media stream and recorder
+            if (voiceRecorderRef && voiceRecorderRef.state === 'recording') {
+                voiceRecorderRef.stop();
+            }
+            if (voiceStreamRef) {
+                voiceStreamRef.getTracks().forEach(track => track.stop());
+                voiceStreamRef = null;
+            }
+
+            const duration = Math.round((Date.now() - voiceStartTimeRef) / 1000);
+            
+            // Simulate score based on duration
+            let finalScore = 1.0;
+            let statusMessage = "Simulated: Short recording, minimal vocal analysis possible.";
+            
+            if (duration > 90) {
+                finalScore = 4.0 + Math.random() * 1.0;
+                statusMessage = "Simulated: Prolonged recording (>90s) suggests high vocal strain.";
+            } else if (duration > 30) {
+                finalScore = 2.0 + Math.random() * 2.0;
+                statusMessage = "Simulated: Moderate recording length. Potential signs of early fatigue.";
+            } else {
+                finalScore = 1.0 + Math.random() * 1.0;
+            }
+            
+            const { suggestion } = getRiskData(finalScore);
+            saveEntry('Voice Fatigue', finalScore, duration, `${statusMessage} (${suggestion})`);
+
+            // Reset UI
+            isRecordingVoice = false;
+            voicePing.classList.add('hidden');
+            voiceStatusEl.textContent = `Recording stopped. Duration: ${duration}s. Ready to start new session.`;
+            voiceStatusEl.classList.remove('text-red-500');
+            voiceStatusEl.classList.add('text-gray-500');
+            btnStopVoice.classList.add('hidden');
+            btnStartVoice.classList.remove('hidden');
+            showAlert("Voice Fatigue Checker stopped and data saved.", 'success');
+        }
+
+
+        // --- FIREBASE INITIALIZATION & AUTH ---
+
+        async function initFirebase() {
+            if (Object.keys(firebaseConfig).length === 0) {
+                console.warn("Firebase config missing. Running in mock mode.");
+                userId = crypto.randomUUID();
+                userIdEl.textContent = userId;
                 isAuthReady = true;
-                loading = false;
-                renderHistory();
+                renderHistoryList();
                 return;
             }
 
@@ -295,549 +498,147 @@ HTML_TEMPLATE = """
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                
-                await new Promise((resolve) => {
-                    onAuthStateChanged(auth, async (user) => {
-                        if (user) {
-                            userId = user.uid;
-                        } else {
+                setLogLevel('Debug');
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                    } else {
+                        try {
                             if (initialAuthToken) {
-                                try {
-                                    const userCredential = await signInWithCustomToken(auth, initialAuthToken);
-                                    userId = userCredential.user.uid;
-                                } catch (e) {
-                                    await signInAnonymously(auth).then(c => userId = c.user.uid);
-                                }
+                                await signInWithCustomToken(auth, initialAuthToken);
                             } else {
-                                await signInAnonymously(auth).then(c => userId = c.user.uid);
+                                await signInAnonymously(auth);
                             }
+                            userId = auth.currentUser.uid;
+                        } catch (error) {
+                            console.error("Firebase Auth Error:", error);
+                            userId = crypto.randomUUID();
                         }
-                        // Display truncated User ID for UI clarity, while using full ID for Firestore path
-                        document.getElementById('user-id-display').textContent = \`User ID: \${userId.substring(0, 10)}...\`; 
-                        isAuthReady = true;
-                        resolve();
+                    }
+                    userIdEl.textContent = userId;
+                    isAuthReady = true;
+                    setupHistoryListener();
+                });
+            } catch (error) {
+                console.error("Failed to initialize Firebase:", error);
+                showAlert("Error initializing Firebase. Check console.", 'error');
+                userId = crypto.randomUUID();
+                userIdEl.textContent = userId;
+                isAuthReady = true;
+            }
+        }
+        
+        // --- FIREBASE HISTORY LISTENER ---
+        function setupHistoryListener() {
+            if (!db || !userId || !isAuthReady) return;
+
+            const collectionRef = collection(db, `artifacts/${appId}/users/${userId}/monitor_entries`);
+            
+            onSnapshot(collectionRef, (snapshot) => {
+                let tempHistory = [];
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    tempHistory.push({
+                        id: doc.id,
+                        ...data,
+                        // Convert Firestore Timestamp to JS timestamp
+                        timestamp: data.timestamp ? data.timestamp.toDate().getTime() : Date.now(), 
                     });
                 });
-
-                startDataListener();
-
-            } catch (e) {
-                console.error("Firebase Initialization Error:", e);
-                logError("Failed to initialize Firebase services.");
-                isAuthReady = true;
-                loading = false;
-                renderHistory();
-            }
-        }
-
-        function startDataListener() {
-            if (!db || !userId) return;
-
-            const path = getUserCollectionPath(userId);
-            const q = query(collection(db, path));
-
-            onSnapshot(q, (snapshot) => {
-                const fetchedEntries = snapshot.docs.map(doc => ({
-                    id: doc.id,
-                    ...doc.data()
-                }));
-                // Sort by timestamp in descending order (newest first) in memory
-                const sortedEntries = fetchedEntries.sort((a, b) => 
-                    (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)
-                );
-                
-                currentEntries = sortedEntries;
-                loading = false;
-                renderHistory();
-            }, (err) => {
-                console.error("Firestore Snapshot Error:", err);
-                logError("Failed to load history entries.");
-                loading = false;
-                renderHistory();
+                // Sort by timestamp descending (newest first)
+                tempHistory.sort((a, b) => b.timestamp - a.timestamp);
+                historyData = tempHistory;
+                renderHistoryList();
+            }, (error) => {
+                console.error("Error setting up history listener: ", error);
+                showAlert("Failed to load history.", 'error');
+                renderHistoryList();
             });
         }
-        
-        // --- DATA LOGIC & UTILS ---
-        
-        function generateBlinkRate() {
-            // Simulate a slightly higher chance of strain to make it interesting
-            const rate = Math.floor(Math.random() * 40) + 5; // 5 to 44 blinks/min
-            const strain = rate < 8 || rate > 30; // High strain if too low or too high
-            return { rate, strain };
-        }
 
-        function analyzeVoiceStrain(durationSeconds) {
-            const factor = Math.random();
-            let strainLevel = 'Low';
+
+        // --- EVENT HANDLERS ---
+        function changeTab(activeTabId) {
+            // Hide all content and deactivate all buttons
+            [contentMonitor, contentHistory, contentReports].forEach(el => el.classList.add('hidden'));
+            [tabMonitor, tabHistory, tabReports].forEach(el => el.classList.remove('active'));
+
+            // Show active content and activate button
+            const activeContent = D('content-' + activeTabId);
+            const activeTabButton = D('tab-' + activeTabId);
             
-            if (durationSeconds < 1) {
-                strainLevel = 'Inconclusive (Too short)';
-            } else if (durationSeconds > 15 && factor > 0.6) {
-                // Higher chance of strain if test is long
-                strainLevel = 'High (Detected)';
-            } else if (factor > 0.7) {
-                strainLevel = 'Medium';
+            if (activeContent) activeContent.classList.remove('hidden');
+            if (activeTabButton) activeTabButton.classList.add('active');
+
+            if (activeTabId === 'history') {
+                renderHistoryList();
             }
-            
-            return strainLevel;
-        }
-
-        async function logResult(entryData) {
-            if (!db || !userId) {
-                logError("Authentication not complete. Cannot log data.");
-                return;
-            }
-
-            logMessage("Saving analysis result...", 'info');
-            
-            const newEntry = {
-                ...entryData,
-                timestamp: serverTimestamp(),
-                loggedBy: userId, 
-            };
-
-            try {
-                const path = getUserCollectionPath(userId);
-                await addDoc(collection(db, path), newEntry);
-                logMessage(\`Result logged: \${entryData.type === 'blink' ? 'Eye Strain' : 'Voice Fatigue'}\`, 'success');
-            } catch (e) {
-                console.error("Error adding document: ", e);
-                logError("Failed to save entry. Check console.");
+            if (activeTabId === 'reports') {
+                D('pdf-download-link').onclick = () => showAlert("Generating PDF using mock data from the server endpoint.", 'info');
             }
         }
 
-        // --- RENDERING HISTORY ---
+        // --- INITIAL SETUP ON LOAD ---
+        window.addEventListener('load', () => {
+            // Setup Tab Click Listeners
+            tabMonitor.addEventListener('click', () => changeTab('monitor'));
+            tabHistory.addEventListener('click', () => changeTab('history'));
+            tabReports.addEventListener('click', () => changeTab('reports'));
 
-        function renderHistory() {
-            const container = document.getElementById('history-list');
-            container.innerHTML = ''; // Clear existing list
+            // Setup Monitor Button Listeners
+            btnStartEye.addEventListener('click', startEyeTracker);
+            btnStopEye.addEventListener('click', stopEyeTracker);
+            btnStartVoice.addEventListener('click', startVoiceChecker);
+            btnStopVoice.addEventListener('click', stopVoiceChecker);
 
-            if (loading) {
-                container.innerHTML = \`<div class="p-6 text-center text-indigo-500 font-medium bg-white rounded-xl shadow-md">Loading your history...</div>\`;
-                return;
-            }
-
-            if (currentEntries.length === 0) {
-                container.innerHTML = \`<div class="p-6 text-center text-gray-500 italic bg-white rounded-xl shadow-md">Run an analysis using the tools above to start your tracking history!</div>\`;
-                return;
-            }
-
-            currentEntries.forEach(entry => {
-                const isBlinkEntry = entry.type === 'blink';
-                const date = entry.timestamp ? new Date(entry.timestamp.seconds * 1000) : new Date();
-
-                const isHighRisk = isBlinkEntry ? entry.result.strain === true : entry.result.strainLevel.includes('High');
-                const riskColor = isHighRisk ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50';
-                const icon = isBlinkEntry ? '👁️' : '🎙️';
-                const title = isBlinkEntry ? 'Eye Strain Analysis' : 'Vocal Fatigue Test';
-                const riskText = isHighRisk ? 'HIGH RISK' : 'Normal';
-                const riskTextColor = isHighRisk ? 'text-red-600' : 'text-green-600';
-
-                const detailContent = isBlinkEntry ? \`
-                    <p class="text-sm text-gray-700">Blink Rate: <span class="font-semibold">\${entry.result.rate} blinks/min</span></p>
-                    <p class="text-sm text-gray-700">Strain Risk: <span class="font-bold \${riskTextColor}">\${riskText}</span></p>
-                \` : \`
-                    <p class="text-sm text-gray-700">Duration: <span class="font-semibold">\${entry.result.durationSeconds} seconds</span></p>
-                    <p class="text-sm text-gray-700">Strain Level: <span class="font-bold \${riskTextColor}">\${entry.result.strainLevel}</span></p>
-                \`;
-
-                const html = \`
-                    <div class="p-5 rounded-xl shadow-md border-l-4 \${riskColor}">
-                        <div class="flex items-center justify-between mb-3 border-b pb-2">
-                            <div class="flex items-center space-x-3">
-                                <span class="text-2xl">\${icon}</span>
-                                <span class="text-xl font-bold text-gray-800">\${title}</span>
-                            </div>
-                            <div class="text-xs text-gray-500 font-medium">
-                                \${date.toLocaleString()}
-                            </div>
-                        </div>
-                        <div class="flex space-x-6">
-                           \${detailContent}
-                        </div>
-                    </div>
-                \`;
-                container.innerHTML += html;
-            });
-        }
-        
-        // --- TOOL LOGIC: EYE STRAIN (INDEFINITE CAM) ---
-
-        function renderEyeStrainTracker() {
-            // Stop other running tool if active
-            stopVoiceRecording(true); 
-
-            const container = document.getElementById('tool-container');
-            container.innerHTML = \`
-                <div class="p-8 bg-white rounded-2xl shadow-xl space-y-6">
-                    <h3 class="text-2xl font-bold text-gray-800 flex items-center">
-                        👁️ Eye Strain Tracker
-                    </h3>
-                    <p class="text-gray-600 text-sm">Real-time blink analysis runs continuously until you explicitly stop it.</p>
-
-                    <div class="relative w-full aspect-video bg-gray-900 rounded-lg overflow-hidden border-2 border-dashed border-indigo-400">
-                        <video id="video-feed" autoplay playsinline></video>
-                        <div id="blink-status" class="absolute top-0 left-0 w-full h-full flex flex-col items-center justify-center bg-gray-900 bg-opacity-80 text-white font-medium text-lg transition-opacity">
-                            <svg class="w-10 h-10 mb-2 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.55 4.55a.5.5 0 010 .7L15 20m0-10l4.55-4.55a.5.5 0 010-.7L15 4m-6 6l-4.55 4.55a.5.5 0 000 .7L9 20m0-10l-4.55-4.55a.5.5 0 000-.7L9 4"></path></svg>
-                            Camera Idle
-                        </div>
-                    </div>
-
-                    <div id="blink-results" class="hidden p-4 border rounded-xl bg-indigo-50 border-indigo-300 transition-all duration-300"></div>
-
-                    <div class="grid grid-cols-2 gap-4">
-                        <button id="blink-start-btn" class="py-3 font-bold rounded-xl transition duration-200 bg-indigo-600 hover:bg-indigo-700 text-white shadow-md">
-                            Start Camera & Analysis
-                        </button>
-                        <button id="blink-stop-btn" disabled class="py-3 font-bold rounded-xl transition duration-200 bg-red-400 text-white cursor-not-allowed">
-                            Stop Analysis
-                        </button>
-                    </div>
-
-                    <button id="blink-log-btn" disabled class="w-full py-3 bg-green-500 text-white font-bold rounded-xl transition duration-200 opacity-50 cursor-not-allowed hover:bg-green-600">
-                        Log Current Result to History
-                    </button>
-                </div>
-            \`;
-            
-            // Attach event listeners
-            document.getElementById('blink-start-btn').addEventListener('click', startBlinkAnalysis);
-            document.getElementById('blink-stop-btn').addEventListener('click', stopBlinkAnalysis);
-            document.getElementById('blink-log-btn').addEventListener('click', logBlinkResult);
-        }
-        
-        async function startBlinkAnalysis() {
-            if (!userId) { logError("Please wait for authentication to complete."); return; }
-            if (blinkAnalysisInterval !== null) return; 
-
-            const statusEl = document.getElementById('blink-status');
-            const videoEl = document.getElementById('video-feed');
-            const startBtn = document.getElementById('blink-start-btn');
-            const stopBtn = document.getElementById('blink-stop-btn');
-            
-            statusEl.innerHTML = '<svg class="w-8 h-8 animate-spin mr-3 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Starting Camera...';
-            startBtn.disabled = true;
-            
-            try {
-                blinkStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                videoEl.srcObject = blinkStream;
-                statusEl.innerHTML = '<svg class="w-10 h-10 mb-2 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.55 4.55a.5.5 0 010 .7L15 20m0-10l4.55-4.55a.5.5 0 010-.7L15 4m-6 6l-4.55 4.55a.5.5 0 000 .7L9 20m0-10l-4.55-4.55a.5.5 0 000-.7L9 4"></path></svg> Camera Active & Analyzing';
-            } catch (err) {
-                console.error("Camera access failed:", err);
-                statusEl.innerHTML = '<svg class="w-10 h-10 mb-2 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path></svg> Error: Camera permission denied.';
-                stopBlinkAnalysis(true); 
-                return;
-            }
-
-            // Update UI
-            stopBtn.disabled = false;
-            stopBtn.classList.remove('bg-red-400', 'cursor-not-allowed');
-            stopBtn.classList.add('bg-red-600', 'hover:bg-red-700', 'pulse-red');
-
-            // Start indefinite simulated analysis (updates every 4 seconds)
-            updateBlinkAnalysis(); 
-            blinkAnalysisInterval = setInterval(updateBlinkAnalysis, 4000);
-            logMessage("Eye Strain Analysis started. Click 'Log' to save a result.", 'success');
-        }
-
-        function updateBlinkAnalysis() {
-            const { rate, strain } = generateBlinkRate();
-            const isHighRisk = strain;
-            const riskColor = isHighRisk ? 'text-red-600 font-extrabold' : 'text-green-600 font-bold';
-            
-            const resultsEl = document.getElementById('blink-results');
-            resultsEl.classList.remove('hidden');
-            resultsEl.innerHTML = \`
-                <p class="text-sm font-medium">
-                    <span class="text-indigo-700">BLINK RATE:</span> <span class="text-xl font-bold">\${rate} / min</span>
-                </p>
-                <p class="text-sm font-medium">
-                    <span class="text-indigo-700">STRAIN INDICATOR:</span> <span class="text-lg \${riskColor}">
-                        \${isHighRisk ? ' HIGH RISK (Actively Rest)' : ' Normal (Proceed)'}
-                    </span>
-                </p>
-            \`;
-
-            // Store current result for logging
-            document.getElementById('blink-results').dataset.currentResult = JSON.stringify({ rate, strain });
-            document.getElementById('blink-log-btn').disabled = false;
-            document.getElementById('blink-log-btn').classList.remove('opacity-50', 'cursor-not-allowed');
-            document.getElementById('blink-log-btn').classList.add('hover:bg-green-600');
-        }
-
-        function stopBlinkAnalysis(softStop = false) {
-            clearInterval(blinkAnalysisInterval);
-            blinkAnalysisInterval = null;
-            
-            if (blinkStream) {
-                blinkStream.getTracks().forEach(track => track.stop());
-                blinkStream = null;
-            }
-
-            if (!softStop) {
-                document.getElementById('blink-status').innerHTML = '<svg class="w-10 h-10 mb-2 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.55 4.55a.5.5 0 010 .7L15 20m0-10l4.55-4.55a.5.5 0 010-.7L15 4m-6 6l-4.55 4.55a.5.5 0 000 .7L9 20m0-10l-4.55-4.55a.5.5 0 000-.7L9 4"></path></svg> Analysis Stopped';
-            }
-
-            document.getElementById('blink-start-btn').disabled = false;
-            document.getElementById('blink-stop-btn').disabled = true;
-            document.getElementById('blink-stop-btn').classList.remove('bg-red-600', 'hover:bg-red-700', 'pulse-red');
-            document.getElementById('blink-stop-btn').classList.add('bg-red-400', 'cursor-not-allowed');
-        }
-
-        function logBlinkResult() {
-            const resultStr = document.getElementById('blink-results').dataset.currentResult;
-            if (resultStr) {
-                const result = JSON.parse(resultStr);
-                logResult({ type: 'blink', result: result });
-            }
-        }
-        
-        // --- TOOL LOGIC: VOICE FATIGUE (INDEFINITE RECORD) ---
-
-        function renderVoiceFatigueChecker() {
-            // Stop other running tool if active
-            stopBlinkAnalysis(true); 
-
-            const container = document.getElementById('tool-container');
-            container.innerHTML = \`
-                <div class="p-8 bg-white rounded-2xl shadow-xl space-y-6">
-                    <h3 class="text-2xl font-bold text-gray-800 flex items-center">
-                        🎙️ Voice Fatigue Tester
-                    </h3>
-                    <p class="text-gray-600 text-sm">Records microphone audio continuously to detect changes in vocal output that indicate strain.</p>
-
-                    <div class="flex flex-col sm:flex-row justify-between items-center p-4 border rounded-xl bg-gray-100 border-gray-300">
-                        <span id="voice-status" class="font-bold text-gray-700 text-lg mb-2 sm:mb-0">Ready to Record</span>
-                        <span id="voice-duration" class="text-3xl font-mono text-gray-900 bg-gray-200 px-3 py-1 rounded-lg">0.0s</span>
-                    </div>
-
-                    <div id="voice-results" class="hidden p-4 border rounded-xl bg-indigo-50 border-indigo-300 transition-all duration-300"></div>
-                    
-                    <div class="grid grid-cols-2 gap-4">
-                        <button id="voice-start-btn" class="py-3 font-bold rounded-xl transition duration-200 bg-indigo-600 hover:bg-indigo-700 text-white shadow-md">
-                            Start Recording
-                        </button>
-                        <button id="voice-stop-btn" disabled class="py-3 font-bold rounded-xl transition duration-200 bg-red-400 text-white cursor-not-allowed">
-                            Stop Recording
-                        </button>
-                    </div>
-
-                    <button id="voice-log-btn" disabled class="w-full py-3 bg-green-500 text-white font-bold rounded-xl transition duration-200 opacity-50 cursor-not-allowed hover:bg-green-600">
-                        Log Current Result to History
-                    </button>
-                </div>
-            \`;
-            
-            // Attach event listeners
-            document.getElementById('voice-start-btn').addEventListener('click', startVoiceRecording);
-            document.getElementById('voice-stop-btn').addEventListener('click', stopVoiceRecording);
-            document.getElementById('voice-log-btn').addEventListener('click', logVoiceResult);
-        }
-
-        async function startVoiceRecording() {
-            if (!userId) { logError("Please wait for authentication to complete."); return; }
-            if (mediaRecorder && mediaRecorder.state === 'recording') return;
-
-            const statusEl = document.getElementById('voice-status');
-            const startBtn = document.getElementById('voice-start-btn');
-            const stopBtn = document.getElementById('voice-stop-btn');
-            const durationEl = document.getElementById('voice-duration');
-            
-            statusEl.textContent = 'Starting Microphone...';
-            startBtn.disabled = true;
-            
-            try {
-                voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(voiceStream);
-                
-                // No need to collect chunks for simulated analysis, just monitor state
-                mediaRecorder.ondataavailable = (event) => { /* Ignore audio data */ };
-
-                mediaRecorder.onstop = () => {
-                    // This block executes after mediaRecorder.stop() is called
-                    if (voiceStream) {
-                        voiceStream.getTracks().forEach(track => track.stop());
-                        voiceStream = null;
-                    }
-
-                    statusEl.textContent = 'Analyzing Vocal Strain...';
-                    
-                    // Final calculation and analysis
-                    const finalDuration = Math.max(0, (Date.now() - voiceRecordStartTime) / 1000).toFixed(1);
-                    const strainLevel = analyzeVoiceStrain(parseFloat(finalDuration));
-                    
-                    renderVoiceAnalysisResults(finalDuration, strainLevel);
-                    statusEl.textContent = 'Analysis Complete';
-                    statusEl.classList.remove('text-red-500');
-                    statusEl.classList.add('text-gray-700');
-                    
-                    // Stop duration interval
-                    clearInterval(voiceRecordingInterval);
-                    voiceRecordingInterval = null;
-                    voiceRecordStartTime = null;
-                };
-
-                mediaRecorder.start();
-                
-                // Start indefinite duration counter
-                voiceRecordStartTime = Date.now();
-                voiceRecordingInterval = setInterval(() => {
-                    const elapsed = (Date.now() - voiceRecordStartTime) / 1000;
-                    durationEl.textContent = \`${elapsed.toFixed(1)}s\`;
-                }, 100);
-
-                // Update UI
-                stopBtn.disabled = false;
-                stopBtn.classList.remove('bg-red-400', 'cursor-not-allowed');
-                stopBtn.classList.add('bg-red-600', 'hover:bg-red-700', 'pulse-red');
-                statusEl.textContent = 'Recording Voice (Test running indefinitely)';
-                statusEl.classList.add('text-red-500');
-                statusEl.classList.remove('text-gray-700');
-                logMessage("Voice Test started. Record as long as needed.", 'success');
-
-
-            } catch (err) {
-                console.error("Microphone access failed:", err);
-                statusEl.textContent = 'Error: Microphone permission denied.';
-                stopVoiceRecording(true); 
-            }
-        }
-
-        function stopVoiceRecording(softStop = false) {
-            // Stop duration counter immediately
-            clearInterval(voiceRecordingInterval);
-            voiceRecordingInterval = null;
-            
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                mediaRecorder.stop(); // This triggers mediaRecorder.onstop()
-            } else if (voiceStream) {
-                // Manual stop if recording didn't start (e.g., in error case)
-                voiceStream.getTracks().forEach(track => track.stop());
-                voiceStream = null;
-            }
-
-            if (!softStop) {
-                document.getElementById('voice-status').textContent = 'Recording Stopped';
-            }
-
-            document.getElementById('voice-start-btn').disabled = false;
-            document.getElementById('voice-stop-btn').disabled = true;
-            document.getElementById('voice-stop-btn').classList.remove('bg-red-600', 'hover:bg-red-700', 'pulse-red');
-            document.getElementById('voice-stop-btn').classList.add('bg-red-400', 'cursor-not-allowed');
-        }
-
-        function renderVoiceAnalysisResults(duration, strainLevel) {
-            const resultsEl = document.getElementById('voice-results');
-            resultsEl.classList.remove('hidden');
-
-            const isHighRisk = strainLevel.includes('High');
-            const riskColor = isHighRisk ? 'text-red-600 font-extrabold' : 'text-green-600 font-bold';
-
-            resultsEl.innerHTML = \`
-                <p class="text-sm font-medium">
-                    <span class="text-indigo-700">RECORD DURATION:</span> <span class="text-xl font-bold">\${duration}s</span>
-                </p>
-                <p class="text-sm font-medium">
-                    <span class="text-indigo-700">STRAIN LEVEL:</span> <span class="text-lg \${riskColor}">
-                        \${strainLevel}
-                    </span>
-                </p>
-            \`;
-            
-            // Store current result for logging
-            document.getElementById('voice-results').dataset.currentResult = JSON.stringify({ durationSeconds: duration, strainLevel });
-            document.getElementById('voice-log-btn').disabled = false;
-            document.getElementById('voice-log-btn').classList.remove('opacity-50', 'cursor-not-allowed');
-            document.getElementById('voice-log-btn').classList.add('hover:bg-green-600');
-        }
-
-        function logVoiceResult() {
-            const resultStr = document.getElementById('voice-results').dataset.currentResult;
-            if (resultStr) {
-                const result = JSON.parse(resultStr);
-                logResult({ type: 'voice', result: result });
-            }
-        }
-        
-        // --- NAVIGATION & INITIALIZATION ---
-
-        function setToolActive(tool) {
-            // Update tool selection buttons
-            const blinkBtn = document.getElementById('tool-blink');
-            const voiceBtn = document.getElementById('tool-voice');
-            const activeClass = 'bg-indigo-600 text-white shadow-lg';
-            const inactiveClass = 'text-gray-700 hover:bg-gray-100';
-
-            if (tool === 'blink') {
-                blinkBtn.classList.add(...activeClass.split(' '));
-                blinkBtn.classList.remove(...inactiveClass.split(' '));
-                voiceBtn.classList.remove(...activeClass.split(' '));
-                voiceBtn.classList.add(...inactiveClass.split(' '));
-                renderEyeStrainTracker();
-            } else {
-                voiceBtn.classList.add(...activeClass.split(' '));
-                voiceBtn.classList.remove(...inactiveClass.split(' '));
-                blinkBtn.classList.remove(...activeClass.split(' '));
-                blinkBtn.classList.add(...inactiveClass.split(' '));
-                renderVoiceFatigueChecker();
-            }
-        }
-        
-        function setViewActive(view) {
-            const trackerView = document.getElementById('tracker-view');
-            const reportsView = document.getElementById('reports-view');
-            const navTracker = document.getElementById('nav-tracker');
-            const navReports = document.getElementById('nav-reports');
-            const activeClass = 'bg-indigo-600 text-white shadow-lg';
-            const inactiveClass = 'text-gray-700 hover:bg-gray-100';
-            
-            // Stop any running cameras/mics when switching views
-            stopBlinkAnalysis(true); 
-            stopVoiceRecording(true); 
-
-            if (view === 'tracker') {
-                trackerView.classList.remove('hidden');
-                reportsView.classList.add('hidden');
-                navTracker.classList.add(...activeClass.split(' '));
-                navTracker.classList.remove(...inactiveClass.split(' '));
-                navReports.classList.remove(...activeClass.split(' '));
-                navReports.classList.add(...inactiveClass.split(' '));
-            } else {
-                reportsView.classList.remove('hidden');
-                trackerView.classList.add('hidden');
-                navReports.classList.add(...activeClass.split(' '));
-                navReports.classList.remove(...inactiveClass.split(' '));
-                navTracker.classList.remove(...activeClass.split(' '));
-                navTracker.classList.add(...inactiveClass.split(' '));
-            }
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            initializeFirebase();
-            
-            // Initial render
-            setToolActive('blink');
-
-            // Set up main navigation listeners
-            document.getElementById('nav-tracker').addEventListener('click', () => setViewActive('tracker'));
-            document.getElementById('nav-reports').addEventListener('click', () => setViewActive('reports'));
-
-            // Set up tool navigation listeners
-            document.getElementById('tool-blink').addEventListener('click', () => setToolActive('blink'));
-            document.getElementById('tool-voice').addEventListener('click', () => setToolActive('voice'));
-        });
-        
-        // Cleanup streams/intervals on navigation away from the app (simulated unmount)
-        window.addEventListener('beforeunload', () => {
-             stopBlinkAnalysis(true);
-             stopVoiceRecording(true);
+            initFirebase();
         });
 
     </script>
 </body>
 </html>
 """
+# --- END OF EMBEDDED HTML/JAVASCRIPT FRONTEND ---
 
-if __name__ == '__main__':
-    # This server is primarily for demonstration; frontend JS handles actual runtime logic.
-    app.run(debug=True)
+
+@app.route('/')
+def index():
+    """Renders the main HTML page containing the Biometric Health Monitor."""
+    # Use render_template_string to serve the embedded HTML content
+    return render_template_string(HTML_CONTENT)
+
+@app.route('/download_report')
+def download_report():
+    """
+    Simulates generating and serving a simple PDF report. 
+    (In a real application, a library like ReportLab or FPDF would be used here.)
+    """
+    now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    filename = f"health_report_{now}.txt"
+    
+    # Create a simple mock report content
+    report_content = f"""
+    BIOMETRIC HEALTH MONITOR REPORT
+    --------------------------------------
+    Date Generated: {datetime.datetime.now()}
+    
+    This is a mock report demonstrating the Flask endpoint functionality.
+    
+    Analysis Summary (Mock Data):
+    - Total Eye Strain Checks: 15
+    - Average Eye Risk Score: 2.3 (MEDIUM)
+    - Total Voice Fatigue Checks: 8
+    - Average Voice Risk Score: 1.8 (LOW)
+    
+    Recommendation: Continue monitoring and take breaks when scores exceed 3.5.
+    
+    (Note: This content is simulated as client-side data cannot be accessed by Flask.)
+    """
+    
+    # Create a response object to serve the text file as a download
+    response = make_response(report_content)
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    response.headers["Content-type"] = "text/plain"
+    
+    return response
